@@ -1,12 +1,12 @@
 # RunPod Kubernetes — GPU values
 # Cheapest path to a real GPU for this lab (~$0.20-0.50/hr for an RTX 4090)
-# RunPod offers managed Kubernetes with per-hour GPU billing.
 #
 # Setup:
-#   1. Go to runpod.io → Kubernetes → Create Cluster
-#   2. Add a GPU worker: RTX 4090 (24GB VRAM) or A40 (48GB VRAM)
-#   3. Download kubeconfig and set: export KUBECONFIG=~/runpod-kubeconfig.yaml
-#   4. RunPod clusters come with NVIDIA device plugin pre-installed
+#   1. runpod.io → Kubernetes → Create Cluster
+#   2. Add a GPU worker: RTX 4090 (24GB VRAM) — cheapest option
+#   3. Download kubeconfig → save as ~/runpod-kubeconfig.yaml
+#   4. export KUBECONFIG=~/runpod-kubeconfig.yaml
+#   5. kubectl get nodes   ← should show your GPU node Ready
 #
 # Deploy:
 #   helm install vllm-stack helm/vllm-stack/ \
@@ -18,20 +18,23 @@
 vllm:
   image:
     repository: vllm/vllm-openai
-    tag: "v0.6.3"
+    tag: "v0.6.3"        # stable GPU release; CPU bugs we hit don't affect GPU
     pullPolicy: IfNotPresent
 
-  replicaCount: 2
+  replicaCount: 1        # start with 1; scale up once smoke test passes
+
+  gpu:
+    enabled: true
+    count: 1
 
   model:
-    # RTX 4090 has 24GB VRAM — Llama 3.1 8B fits in FP16 with room for KV-cache
-    id: "meta-llama/Meta-Llama-3.1-8B-Instruct"
-    alias: "llama-3.1-8b"
+    id: "Qwen/Qwen2.5-7B-Instruct"   # open-access, no HF approval needed; fits in 24GB FP16
+    alias: "qwen-7b"
     maxLen: 8192
 
   engine:
     tensorParallelSize: 1
-    gpuMemoryUtilization: "0.90"
+    gpuMemoryUtilization: "0.90"      # leave 10% headroom for OS/k8s overhead
     maxNumSeqs: 256
     maxNumBatchedTokens: 8192
     swapSpace: 4
@@ -43,30 +46,27 @@ vllm:
     requests:
       memory: 16Gi
       cpu: "4"
-      nvidia.com/gpu: "1"
     limits:
       memory: 22Gi
       cpu: "8"
-      nvidia.com/gpu: "1"
 
-  nodeSelector: {}    # RunPod labels vary — leave empty or set after inspecting nodes
+  nodeSelector: {}       # RunPod labels vary — leave empty or set after kubectl get nodes
 
   tolerations:
     - key: nvidia.com/gpu
       operator: Exists
       effect: NoSchedule
 
-  podAntiAffinity: true
+  podAntiAffinity: false  # single node — anti-affinity has no effect
 
   persistence:
-    # RunPod doesn't always have ReadWriteMany storage — use emptyDir per-pod
-    enabled: false
+    enabled: false        # emptyDir per-pod; model re-downloads on restart
 
   probes:
     startup:
       initialDelaySeconds: 60
       periodSeconds: 10
-      failureThreshold: 30
+      failureThreshold: 30   # 60 + 30×10 = 360s for model download + load
     readiness:
       initialDelaySeconds: 120
       periodSeconds: 10
@@ -77,34 +77,17 @@ vllm:
       failureThreshold: 5
 
   pdb:
-    enabled: true
-    minAvailable: 1
+    enabled: false        # single replica — PDB has no effect
 
 router:
-  enabled: true
-  replicaCount: 1    # Save cost on RunPod — single router is fine for testing
-  pollIntervalS: 5
-  requestTimeoutS: 300
-  maxRetries: 2
-  resources:
-    requests:
-      memory: 256Mi
-      cpu: "250m"
-    limits:
-      memory: 512Mi
-      cpu: "500m"
-  service:
-    type: LoadBalancer   # RunPod exposes LoadBalancer services with public IP
-    port: 80
-  ingress:
-    enabled: false      # Use LoadBalancer IP directly for testing
+  enabled: false          # skip router for initial smoke test
 
 autoscaling:
-  enabled: false    # Skip unless prometheus-adapter is installed
+  enabled: false
 
 observability:
   serviceMonitor:
-    enabled: false   # Enable if you install kube-prometheus-stack on RunPod
+    enabled: false
   prometheusRule:
     enabled: false
   grafana:
