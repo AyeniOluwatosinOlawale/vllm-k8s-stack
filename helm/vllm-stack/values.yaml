@@ -30,15 +30,17 @@ vllm:
     enableChunkedPrefill: true
     maxChunkedTokens: 512
 
+  gpu:
+    enabled: true
+    count: 1
+
   resources:
     requests:
       memory: 16Gi
       cpu: "4"
-      nvidia.com/gpu: "1"
     limits:
       memory: 24Gi
       cpu: "8"
-      nvidia.com/gpu: "1"
 
   nodeSelector:
     nvidia.com/gpu.present: "true"

@@ -1,0 +1,117 @@
+# Vast.ai — single-node k3s GPU values
+#
+# Instance recommendations (vast.ai search):
+#   RTX 3090 / 4090  (24 GB VRAM)  ~$0.15-0.40/hr  ← best value for Llama 3.1 8B
+#   A100 40GB                       ~$0.80-1.20/hr  ← for longer context / bigger models
+#
+# Template to select on vast.ai: "pytorch/pytorch:2.1.0-cuda12.1-cudnn8-devel"
+# or any Ubuntu 22.04 + CUDA 12.x image
+#
+# Ports to open in vast.ai instance config:
+#   8080 → router API
+#   6443 → k3s API server (needed if you want remote kubectl)
+#
+# Deploy (from inside the vast.ai instance after running setup-vastai.sh):
+#   helm install vllm-stack /root/vllm-k8s-stack/helm/vllm-stack/ \
+#     --namespace llm-serving --create-namespace \
+#     --values /root/vllm-k8s-stack/helm/vllm-stack/values-vastai.yaml \
+#     --set secrets.hfToken=$HF_TOKEN \
+#     --set secrets.vllmApiKey=$VLLM_API_KEY
+
+vllm:
+  image:
+    repository: vllm/vllm-openai
+    tag: "v0.6.3"
+    pullPolicy: IfNotPresent
+
+  replicaCount: 2   # 2 pods on 1 node sharing the same GPU via time-slicing
+                    # For 2 physical GPUs on one instance, set replicaCount: 2 and tensorParallelSize: 1
+
+  model:
+    id: "Qwen/Qwen2.5-7B-Instruct"    # 7B fits in 24GB VRAM in FP16
+    alias: "qwen-7b"
+    maxLen: 8192
+
+  engine:
+    tensorParallelSize: 1
+    gpuMemoryUtilization: "0.85"    # leave headroom for OS and k3s overhead
+    maxNumSeqs: 128
+    maxNumBatchedTokens: 4096
+    swapSpace: 4
+    enablePrefixCaching: true
+    enableChunkedPrefill: true
+    maxChunkedTokens: 512
+
+  resources:
+    requests:
+      memory: 14Gi
+      cpu: "4"
+      nvidia.com/gpu: "1"
+    limits:
+      memory: 20Gi
+      cpu: "8"
+      nvidia.com/gpu: "1"
+
+  # k3s single-node: no GPU node label filtering needed
+  nodeSelector: {}
+
+  tolerations:
+    - key: nvidia.com/gpu
+      operator: Exists
+      effect: NoSchedule
+
+  # Single node — anti-affinity has no effect but keep it for portability
+  podAntiAffinity: false
+
+  persistence:
+    enabled: true
+    storageClass: local-path    # k3s built-in local storage provisioner
+    size: 30Gi
+    accessMode: ReadWriteOnce
+
+  probes:
+    startup:
+      initialDelaySeconds: 60
+      periodSeconds: 10
+      failureThreshold: 30
+    readiness:
+      initialDelaySeconds: 120
+      periodSeconds: 10
+      failureThreshold: 3
+    liveness:
+      initialDelaySeconds: 180
+      periodSeconds: 30
+      failureThreshold: 5
+
+  pdb:
+    enabled: false    # single node — PDB has no effect
+
+router:
+  enabled: true
+  replicaCount: 1
+  pollIntervalS: 5
+  requestTimeoutS: 300
+  maxRetries: 2
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: "250m"
+    limits:
+      memory: 512Mi
+      cpu: "500m"
+  service:
+    type: NodePort    # expose on the host — map this port in vast.ai dashboard
+    port: 80
+  ingress:
+    enabled: false
+
+autoscaling:
+  enabled: false    # single node, no prometheus-adapter
+
+observability:
+  serviceMonitor:
+    enabled: false
+  prometheusRule:
+    enabled: false
+  grafana:
+    dashboardEnabled: false

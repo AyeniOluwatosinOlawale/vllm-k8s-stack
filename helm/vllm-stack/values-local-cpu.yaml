@@ -8,38 +8,51 @@
 vllm:
   image:
     repository: vllm/vllm-openai
-    tag: "v0.6.3"
+    tag: "v0.7.3"
     pullPolicy: IfNotPresent
 
-  replicaCount: 2
+  replicaCount: 1
+
+  gpu:
+    enabled: false    # no GPU in local minikube
 
   model:
     id: "Qwen/Qwen2.5-0.5B-Instruct"
     alias: "qwen-0.5b"
-    maxLen: 2048
+    maxLen: 512
 
   engine:
     tensorParallelSize: 1
     gpuMemoryUtilization: "0.0"   # ignored in CPU mode
-    maxNumSeqs: 16
-    maxNumBatchedTokens: 2048
+    maxNumSeqs: 4
+    maxNumBatchedTokens: 512
     swapSpace: 0
-    enablePrefixCaching: true
-    enableChunkedPrefill: false   # CPU mode doesn't support chunked prefill
+    enablePrefixCaching: false
+    enableChunkedPrefill: false
     maxChunkedTokens: 512
 
   # Extra args for CPU mode — appended to the deployment args list
   extraArgs:
     - "--device=cpu"
     - "--dtype=float32"
+    - "--enforce-eager"
+    - "--disable-frontend-multiprocessing"
+
+  # Cap CPU KV-cache at 1 GB; default is 4 GB which causes OOM on local clusters.
+  extraEnv:
+    - name: VLLM_CPU_KVCACHE_SPACE
+      value: "1"
 
   resources:
     requests:
       memory: 3Gi
       cpu: "2"
     limits:
-      memory: 5Gi
+      memory: 6Gi
       cpu: "4"
+
+  # CPU mode doesn't use /dev/shm; keep it small to avoid eating node memory
+  shmSizeLimit: "256Mi"
 
   # No GPU required
   nodeSelector: {}

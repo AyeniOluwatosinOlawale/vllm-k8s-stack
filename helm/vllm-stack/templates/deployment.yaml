@@ -38,10 +38,17 @@ spec:
                     {{- include "vllm-stack.selectorLabels" . | nindent 20 }}
                 topologyKey: kubernetes.io/hostname
       {{- end }}
+      {{- if and .Values.vllm.gpu.enabled .Values.vllm.nodeSelector }}
       nodeSelector:
         {{- toYaml .Values.vllm.nodeSelector | nindent 8 }}
+      {{- end }}
+      {{- if .Values.vllm.tolerations }}
       tolerations:
         {{- toYaml .Values.vllm.tolerations | nindent 8 }}
+      {{- end }}
+      # Prevent Kubernetes from injecting VLLM_PORT=tcp://... env vars
+      # from Service discovery — vLLM reads VLLM_PORT as an integer and crashes.
+      enableServiceLinks: false
       terminationGracePeriodSeconds: 120
       volumes:
         {{- if .Values.vllm.persistence.enabled }}
@@ -52,7 +59,7 @@ spec:
         - name: shm
           emptyDir:
             medium: Memory
-            sizeLimit: 8Gi
+            sizeLimit: {{ .Values.vllm.shmSizeLimit | default "8Gi" }}
       containers:
         - name: vllm
           image: "{{ .Values.vllm.image.repository }}:{{ .Values.vllm.image.tag }}"
@@ -61,10 +68,6 @@ spec:
             - name: http
               containerPort: 8000
               protocol: TCP
-          command:
-            - python
-            - -m
-            - vllm.entrypoints.openai.api_server
           args:
             - --model=$(MODEL_ID)
             - --tokenizer=$(MODEL_ID)
@@ -74,7 +77,9 @@ spec:
             - --max-num-seqs=$(MAX_NUM_SEQS)
             - --max-num-batched-tokens=$(MAX_NUM_BATCHED_TOKENS)
             - --swap-space=$(SWAP_SPACE)
-            - --enable-prefix-caching=$(ENABLE_PREFIX_CACHING)
+            {{- if .Values.vllm.engine.enablePrefixCaching }}
+            - --enable-prefix-caching
+            {{- end }}
             {{- if .Values.vllm.engine.enableChunkedPrefill }}
             - --enable-chunked-prefill
             - --max-num-chunked-tokens=$(MAX_NUM_CHUNKED_TOKENS)
@@ -101,6 +106,9 @@ spec:
                   key: VLLM_API_KEY
             - name: HUGGINGFACE_HUB_CACHE
               value: /model-cache
+            {{- with .Values.vllm.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           volumeMounts:
             {{- if .Values.vllm.persistence.enabled }}
             - name: model-cache
@@ -109,7 +117,18 @@ spec:
             - name: shm
               mountPath: /dev/shm
           resources:
-            {{- toYaml .Values.vllm.resources | nindent 12 }}
+            requests:
+              memory: {{ .Values.vllm.resources.requests.memory }}
+              cpu: {{ .Values.vllm.resources.requests.cpu | quote }}
+              {{- if .Values.vllm.gpu.enabled }}
+              nvidia.com/gpu: {{ .Values.vllm.gpu.count | quote }}
+              {{- end }}
+            limits:
+              memory: {{ .Values.vllm.resources.limits.memory }}
+              cpu: {{ .Values.vllm.resources.limits.cpu | quote }}
+              {{- if .Values.vllm.gpu.enabled }}
+              nvidia.com/gpu: {{ .Values.vllm.gpu.count | quote }}
+              {{- end }}
           startupProbe:
             httpGet:
               path: /health
