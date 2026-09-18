@@ -18,7 +18,7 @@
 vllm:
   image:
     repository: vllm/vllm-openai
-    tag: "v0.6.3"        # stable GPU release; CPU bugs we hit don't affect GPU
+    tag: "v0.8.5"        # v0.8+ required for Qwen3 architecture support
     pullPolicy: IfNotPresent
 
   replicaCount: 1        # start with 1; scale up once smoke test passes
@@ -28,8 +28,8 @@ vllm:
     count: 1
 
   model:
-    id: "Qwen/Qwen2.5-7B-Instruct"   # open-access, no HF approval needed; fits in 24GB FP16
-    alias: "qwen-7b"
+    id: "Qwen/Qwen3-8B"              # open-access, no HF approval needed; fits in 24GB VRAM in BF16
+    alias: "qwen3-8b"
     maxLen: 8192
 
   engine:
