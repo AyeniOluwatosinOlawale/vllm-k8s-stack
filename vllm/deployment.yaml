@@ -1,0 +1,290 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm
+  namespace: llm-serving
+  labels:
+    app: vllm
+    app.kubernetes.io/component: inference-engine
+    app.kubernetes.io/version: "0.6.3"
+  annotations:
+    # Track which model is loaded — used by the router for model-aware routing.
+    inference.io/model-id: "meta-llama/Meta-Llama-3.1-8B-Instruct"
+    inference.io/model-alias: "llama-3.1-8b"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: vllm
+  # RollingUpdate: keep at least one replica serving during deploys.
+  # maxSurge: 1 means we spin up a new pod before taking one down,
+  # which prevents the queue from spiking during rollout.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: vllm
+        app.kubernetes.io/component: inference-engine
+      annotations:
+        # Prometheus will scrape /metrics directly from pods via the headless service.
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      # Spread replicas across nodes so a single node failure doesn't take out
+      # all serving capacity.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values: [vllm]
+                topologyKey: kubernetes.io/hostname
+
+      # Only schedule on nodes that have a GPU.
+      nodeSelector:
+        nvidia.com/gpu.present: "true"
+
+      # Tolerate the taint that GPU nodes typically carry so that CPU-only
+      # workloads don't accidentally land on expensive GPU nodes.
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+
+      # Give the model time to load (can take 60-120s for 8B models on cold storage).
+      terminationGracePeriodSeconds: 120
+
+      volumes:
+        - name: model-cache
+          # PVC for HuggingFace model weights cache.
+          # Prevents re-downloading the model on every pod restart.
+          persistentVolumeClaim:
+            claimName: vllm-model-cache
+        - name: shm
+          # Shared memory for PyTorch DataLoader workers and NCCL communications.
+          emptyDir:
+            medium: Memory
+            sizeLimit: 8Gi
+
+      initContainers:
+        # Pre-pull the model weights from HuggingFace before vLLM starts.
+        # This decouples model download from vLLM startup and gives a cleaner
+        # readiness signal — vLLM's /health only becomes ready after full load.
+        - name: model-downloader
+          image: huggingface/transformers-pytorch-gpu:latest
+          command:
+            - python
+            - -c
+            - |
+              from huggingface_hub import snapshot_download
+              import os
+              snapshot_download(
+                  repo_id=os.environ["MODEL_ID"],
+                  cache_dir="/model-cache",
+                  ignore_patterns=["*.msgpack", "*.h5", "flax_model*"],
+              )
+          env:
+            - name: MODEL_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: vllm-config
+                  key: MODEL_ID
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: vllm-secrets
+                  key: HF_TOKEN
+          volumeMounts:
+            - name: model-cache
+              mountPath: /model-cache
+          resources:
+            requests:
+              memory: 4Gi
+              cpu: "2"
+            limits:
+              memory: 8Gi
+              cpu: "4"
+
+      containers:
+        - name: vllm
+          image: vllm/vllm-openai:v0.6.3
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+
+          command:
+            - python
+            - -m
+            - vllm.entrypoints.openai.api_server
+
+          args:
+            - --model=$(MODEL_ID)
+            - --tokenizer=$(MODEL_ID)
+            - --tensor-parallel-size=$(TENSOR_PARALLEL_SIZE)
+            - --gpu-memory-utilization=$(GPU_MEMORY_UTILIZATION)
+            - --max-model-len=$(MAX_MODEL_LEN)
+            - --max-num-seqs=$(MAX_NUM_SEQS)
+            - --max-num-batched-tokens=$(MAX_NUM_BATCHED_TOKENS)
+            - --swap-space=$(SWAP_SPACE)
+            - --enable-prefix-caching=$(ENABLE_PREFIX_CACHING)
+            - --enable-chunked-prefill
+            - --max-num-chunked-tokens=$(MAX_NUM_CHUNKED_TOKENS)
+            - --served-model-name=llama-3.1-8b
+            - --host=0.0.0.0
+            - --port=8000
+            # Expose Prometheus metrics — consumed by the ServiceMonitor.
+            - --disable-log-stats=false
+
+          env:
+            - name: MODEL_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: vllm-config
+                  key: MODEL_ID
+            - name: TENSOR_PARALLEL_SIZE
+              valueFrom:
+                configMapKeyRef:
+                  name: vllm-config
+                  key: TENSOR_PARALLEL_SIZE
+            - name: GPU_MEMORY_UTILIZATION
+              valueFrom:
+                configMapKeyRef:
+                  name: vllm-config
+                  key: GPU_MEMORY_UTILIZATION
+            - name: MAX_MODEL_LEN
+              valueFrom:
+                configMapKeyRef:
+                  name: vllm-config
+                  key: MAX_MODEL_LEN
+            - name: MAX_NUM_SEQS
+              valueFrom:
+                configMapKeyRef:
+                  name: vllm-config
+                  key: MAX_NUM_SEQS
+            - name: MAX_NUM_BATCHED_TOKENS
+              valueFrom:
+                configMapKeyRef:
+                  name: vllm-config
+                  key: MAX_NUM_BATCHED_TOKENS
+            - name: SWAP_SPACE
+              valueFrom:
+                configMapKeyRef:
+                  name: vllm-config
+                  key: SWAP_SPACE
+            - name: ENABLE_PREFIX_CACHING
+              valueFrom:
+                configMapKeyRef:
+                  name: vllm-config
+                  key: ENABLE_PREFIX_CACHING
+            - name: ENABLE_CHUNKED_PREFILL
+              valueFrom:
+                configMapKeyRef:
+                  name: vllm-config
+                  key: ENABLE_CHUNKED_PREFILL
+            - name: MAX_NUM_CHUNKED_TOKENS
+              valueFrom:
+                configMapKeyRef:
+                  name: vllm-config
+                  key: MAX_NUM_CHUNKED_TOKENS
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: vllm-secrets
+                  key: HF_TOKEN
+            - name: VLLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: vllm-secrets
+                  key: VLLM_API_KEY
+            - name: HUGGINGFACE_HUB_CACHE
+              value: /model-cache
+
+          volumeMounts:
+            - name: model-cache
+              mountPath: /model-cache
+            - name: shm
+              mountPath: /dev/shm
+
+          resources:
+            requests:
+              memory: 16Gi
+              cpu: "4"
+              nvidia.com/gpu: "1"
+            limits:
+              memory: 24Gi
+              cpu: "8"
+              nvidia.com/gpu: "1"
+
+          # readinessProbe: vLLM's /health returns 200 only after the model is
+          # fully loaded and the engine is ready to accept requests.
+          # initialDelaySeconds is generous because 8B models take ~90s to load.
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 120
+            periodSeconds: 10
+            failureThreshold: 3
+            successThreshold: 1
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 180
+            periodSeconds: 30
+            failureThreshold: 5
+
+          # startupProbe prevents liveness/readiness from killing the pod during
+          # the initial long model-load window (up to 300s).
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            failureThreshold: 24  # 60 + 24*10 = 300s max startup
+
+---
+# PersistentVolumeClaim for model weights cache.
+# ReadWriteMany so all replicas share the same cached weights.
+# Use a fast storage class (NVMe SSD or equivalent) to avoid slow model loads.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: vllm-model-cache
+  namespace: llm-serving
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: fast-ssd
+  resources:
+    requests:
+      storage: 50Gi
+
+---
+# Secret template — apply with real values before deploying.
+# kubectl create secret generic vllm-secrets \
+#   --namespace llm-serving \
+#   --from-literal=HF_TOKEN=<your-hf-token> \
+#   --from-literal=VLLM_API_KEY=<your-api-key>
+apiVersion: v1
+kind: Secret
+metadata:
+  name: vllm-secrets
+  namespace: llm-serving
+type: Opaque
+stringData:
+  HF_TOKEN: "REPLACE_WITH_REAL_TOKEN"
+  VLLM_API_KEY: "REPLACE_WITH_REAL_API_KEY"

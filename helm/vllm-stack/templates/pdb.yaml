@@ -1,0 +1,14 @@
+{{- if .Values.vllm.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: vllm-pdb
+  namespace: {{ include "vllm-stack.namespace" . }}
+  labels:
+    {{- include "vllm-stack.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.vllm.pdb.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "vllm-stack.selectorLabels" . | nindent 6 }}
+{{- end }}

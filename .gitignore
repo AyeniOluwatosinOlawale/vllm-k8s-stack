@@ -1,0 +1,29 @@
+# Secrets — never commit real tokens
+*secrets*.yaml
+*.env
+.env.*
+local_keys.py
+
+# Load test output
+load_test_results/
+failure_drill_*.json
+benchmark_results_*.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# macOS
+.DS_Store
+
+# Helm
+charts/
+*.tgz
+
+# Editor
+.idea/
+.vscode/
+*.swp

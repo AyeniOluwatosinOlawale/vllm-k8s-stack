@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vllm-config
+  namespace: llm-serving
+  labels:
+    app: vllm
+    app.kubernetes.io/component: inference-engine
+data:
+  # vLLM engine arguments passed as command-line flags in the Deployment.
+  # These are extracted here so the Deployment spec stays readable and values
+  # can be patched without touching the pod template (which forces a rollout).
+
+  MODEL_ID: "meta-llama/Meta-Llama-3.1-8B-Instruct"
+  MAX_MODEL_LEN: "8192"
+  TENSOR_PARALLEL_SIZE: "1"
+  GPU_MEMORY_UTILIZATION: "0.90"
+  MAX_NUM_SEQS: "256"
+  MAX_NUM_BATCHED_TOKENS: "8192"
+
+  # KV-cache tuning
+  # swap_space: CPU memory (GB) used for KV-cache swapping when GPU cache is full.
+  # Reduces eviction at the cost of slower decode on swapped sequences.
+  SWAP_SPACE: "4"
+
+  # Prefix caching: reuse KV-cache for identical prompt prefixes across requests.
+  # Critical for chat workloads where the system prompt is repeated.
+  ENABLE_PREFIX_CACHING: "true"
+
+  # Chunked prefill: split long prompts into chunks to prevent TTFT spikes
+  # under concurrent load. Also improves GPU utilization during prefill.
+  ENABLE_CHUNKED_PREFILL: "true"
+  MAX_NUM_CHUNKED_TOKENS: "512"
+
+  # Prometheus metrics are exported at /metrics on the same port as the API.
+  # The ServiceMonitor picks these up automatically.
+  DISABLE_LOG_STATS: "false"
+  DISABLE_LOG_REQUESTS: "false"

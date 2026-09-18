@@ -1,0 +1,38 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: vllm-ingress
+  namespace: llm-serving
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    # Streaming: disable buffering so SSE tokens reach the client immediately.
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "10"
+    # Allow large request bodies (long prompts can be several KB).
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    # Rate limiting — 100 requests per second per client IP.
+    # Adjust based on your production load and abuse tolerance.
+    nginx.ingress.kubernetes.io/limit-rps: "100"
+    # CORS for browser clients
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "*"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "POST, GET, OPTIONS"
+    nginx.ingress.kubernetes.io/cors-allow-headers: "Content-Type, Authorization"
+spec:
+  tls:
+    - hosts:
+        - llm.your-domain.com
+      secretName: vllm-tls-cert    # cert-manager will provision this
+  rules:
+    - host: llm.your-domain.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: vllm-router
+                port:
+                  name: http

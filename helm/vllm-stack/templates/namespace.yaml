@@ -1,0 +1,9 @@
+{{- if .Values.namespace.create }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ include "vllm-stack.namespace" . }}
+  labels:
+    {{- include "vllm-stack.labels" . | nindent 4 }}
+    nvidia.com/gpu.deploy.operands: "true"
+{{- end }}

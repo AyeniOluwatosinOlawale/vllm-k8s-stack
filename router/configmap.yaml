@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vllm-router-config
+  namespace: llm-serving
+  labels:
+    app: vllm-router
+data:
+  # JSON map of model alias → list of replica base URLs.
+  # Uses headless service DNS: {pod}.{headless-svc}.{namespace}.svc:{port}
+  # For StatefulSets the pod names are stable. For Deployments, pod names are
+  # random — prefer StatefulSets for vLLM in production (or use the env-based
+  # replica list here updated by a controller).
+  REPLICA_POOLS: |
+    {
+      "llama-3.1-8b": [
+        "http://vllm-0.vllm-headless.llm-serving.svc:8000",
+        "http://vllm-1.vllm-headless.llm-serving.svc:8000"
+      ]
+    }
+
+  POLL_INTERVAL_S: "5"
+  UNHEALTHY_THRESHOLD: "3"
+  REQUEST_TIMEOUT_S: "300"
+  MAX_RETRIES: "2"

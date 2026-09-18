@@ -1,0 +1,100 @@
+# Local CPU-only override values
+# Runs vLLM on CPU with a 500M model — no GPU required.
+# Use with: helm install vllm-stack helm/vllm-stack/ -f values-local-cpu.yaml
+#
+# Model: Qwen/Qwen2.5-0.5B-Instruct (~1GB download, fits in 4GB RAM)
+# Expected performance: ~5-15 tokens/sec on a Mac M-series or 4-core x86
+
+vllm:
+  image:
+    repository: vllm/vllm-openai
+    tag: "v0.6.3"
+    pullPolicy: IfNotPresent
+
+  replicaCount: 2
+
+  model:
+    id: "Qwen/Qwen2.5-0.5B-Instruct"
+    alias: "qwen-0.5b"
+    maxLen: 2048
+
+  engine:
+    tensorParallelSize: 1
+    gpuMemoryUtilization: "0.0"   # ignored in CPU mode
+    maxNumSeqs: 16
+    maxNumBatchedTokens: 2048
+    swapSpace: 0
+    enablePrefixCaching: true
+    enableChunkedPrefill: false   # CPU mode doesn't support chunked prefill
+    maxChunkedTokens: 512
+
+  # Extra args for CPU mode — appended to the deployment args list
+  extraArgs:
+    - "--device=cpu"
+    - "--dtype=float32"
+
+  resources:
+    requests:
+      memory: 3Gi
+      cpu: "2"
+    limits:
+      memory: 5Gi
+      cpu: "4"
+
+  # No GPU required
+  nodeSelector: {}
+  tolerations: []
+
+  persistence:
+    enabled: false   # use emptyDir instead of PVC
+
+  probes:
+    startup:
+      initialDelaySeconds: 30
+      periodSeconds: 10
+      failureThreshold: 18    # 30 + 18*10 = 210s max (CPU model loads faster)
+    readiness:
+      initialDelaySeconds: 60
+      periodSeconds: 10
+      failureThreshold: 3
+    liveness:
+      initialDelaySeconds: 90
+      periodSeconds: 30
+      failureThreshold: 5
+
+  pdb:
+    enabled: true
+    minAvailable: 1
+
+router:
+  enabled: true
+  replicaCount: 1
+  pollIntervalS: 5
+  requestTimeoutS: 120
+  maxRetries: 2
+
+  resources:
+    requests:
+      memory: 128Mi
+      cpu: "100m"
+    limits:
+      memory: 256Mi
+      cpu: "250m"
+
+  service:
+    type: ClusterIP
+    port: 80
+
+  ingress:
+    enabled: false   # use port-forward for local testing
+
+autoscaling:
+  enabled: false   # minikube doesn't have prometheus-adapter by default
+
+observability:
+  serviceMonitor:
+    enabled: false   # skip unless you install kube-prometheus-stack in minikube
+  prometheusRule:
+    enabled: false
+  grafana:
+    dashboardEnabled: false

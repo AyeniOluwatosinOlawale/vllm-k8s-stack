@@ -1,0 +1,373 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_PROMETHEUS",
+      "label": "Prometheus",
+      "description": "",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "annotations": { "list": [] },
+  "description": "Production vLLM inference stack — KV-cache, latency, throughput, GPU",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 1,
+      "title": "KV-Cache",
+      "type": "row"
+    },
+    {
+      "datasource": "${DS_PROMETHEUS}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "max": 1,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.6 },
+              { "color": "orange", "value": 0.75 },
+              { "color": "red", "value": 0.9 }
+            ]
+          },
+          "unit": "percentunit"
+        }
+      },
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 1 },
+      "id": 2,
+      "options": {
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "title": "GPU KV-Cache Usage (per pod)",
+      "type": "gauge",
+      "targets": [
+        {
+          "datasource": "${DS_PROMETHEUS}",
+          "expr": "avg by (pod) (vllm:gpu_cache_usage_perc{namespace=\"llm-serving\"})",
+          "legendFormat": "{{pod}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": "${DS_PROMETHEUS}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2 },
+          "unit": "percentunit"
+        }
+      },
+      "gridPos": { "h": 8, "w": 18, "x": 6, "y": 1 },
+      "id": 3,
+      "options": { "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" } },
+      "title": "KV-Cache Usage Over Time",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": "${DS_PROMETHEUS}",
+          "expr": "avg by (pod) (vllm:gpu_cache_usage_perc{namespace=\"llm-serving\"})",
+          "legendFormat": "kv_cache {{pod}}",
+          "refId": "A"
+        },
+        {
+          "datasource": "${DS_PROMETHEUS}",
+          "expr": "avg by (pod) (vllm:cpu_cache_usage_perc{namespace=\"llm-serving\"})",
+          "legendFormat": "cpu_cache {{pod}}",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 },
+      "id": 10,
+      "title": "Request Queue & Throughput",
+      "type": "row"
+    },
+    {
+      "datasource": "${DS_PROMETHEUS}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2 }
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 10 },
+      "id": 11,
+      "options": { "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" } },
+      "title": "Requests: Running vs Waiting vs Swapped",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (pod) (vllm:num_requests_running{namespace=\"llm-serving\"})",
+          "legendFormat": "running {{pod}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (pod) (vllm:num_requests_waiting{namespace=\"llm-serving\"})",
+          "legendFormat": "waiting {{pod}}",
+          "refId": "B"
+        },
+        {
+          "expr": "sum by (pod) (vllm:num_requests_swapped{namespace=\"llm-serving\"})",
+          "legendFormat": "swapped {{pod}}",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "datasource": "${DS_PROMETHEUS}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2 },
+          "unit": "reqps"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 10 },
+      "id": 12,
+      "title": "Throughput — Tokens/sec & Requests/sec",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (pod) (vllm:generation_tokens_per_second{namespace=\"llm-serving\"})",
+          "legendFormat": "tokens/s {{pod}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (pod) (vllm:requests_per_second{namespace=\"llm-serving\"})",
+          "legendFormat": "req/s {{pod}}",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 },
+      "id": 20,
+      "title": "Latency — TTFT & TPOT",
+      "type": "row"
+    },
+    {
+      "datasource": "${DS_PROMETHEUS}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2 },
+          "unit": "s"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 19 },
+      "id": 21,
+      "options": { "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" } },
+      "title": "TTFT — P50 / P90 / P99",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (pod, le) (rate(vllm:time_to_first_token_seconds_bucket{namespace=\"llm-serving\"}[1m])))",
+          "legendFormat": "p50 {{pod}}",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.90, sum by (pod, le) (rate(vllm:time_to_first_token_seconds_bucket{namespace=\"llm-serving\"}[1m])))",
+          "legendFormat": "p90 {{pod}}",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (pod, le) (rate(vllm:time_to_first_token_seconds_bucket{namespace=\"llm-serving\"}[1m])))",
+          "legendFormat": "p99 {{pod}}",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "datasource": "${DS_PROMETHEUS}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2 },
+          "unit": "s"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 19 },
+      "id": 22,
+      "title": "TPOT (inter-token latency) — P50 / P90 / P99",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (pod, le) (rate(vllm:time_per_output_token_seconds_bucket{namespace=\"llm-serving\"}[1m])))",
+          "legendFormat": "p50 {{pod}}",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.90, sum by (pod, le) (rate(vllm:time_per_output_token_seconds_bucket{namespace=\"llm-serving\"}[1m])))",
+          "legendFormat": "p90 {{pod}}",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (pod, le) (rate(vllm:time_per_output_token_seconds_bucket{namespace=\"llm-serving\"}[1m])))",
+          "legendFormat": "p99 {{pod}}",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 27 },
+      "id": 30,
+      "title": "GPU Hardware (DCGM)",
+      "type": "row"
+    },
+    {
+      "datasource": "${DS_PROMETHEUS}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2 },
+          "unit": "percent",
+          "max": 100
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
+      "id": 31,
+      "title": "GPU Utilization %",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "avg by (pod) (DCGM_FI_DEV_GPU_UTIL{Kubernetes_namespace=\"llm-serving\"})",
+          "legendFormat": "gpu_util {{pod}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": "${DS_PROMETHEUS}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2 },
+          "unit": "bytes"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
+      "id": 32,
+      "title": "GPU Memory Used",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "avg by (pod) (DCGM_FI_DEV_FB_USED{Kubernetes_namespace=\"llm-serving\"}) * 1048576",
+          "legendFormat": "mem_used {{pod}}",
+          "refId": "A"
+        },
+        {
+          "expr": "avg by (pod) (DCGM_FI_DEV_FB_FREE{Kubernetes_namespace=\"llm-serving\"}) * 1048576",
+          "legendFormat": "mem_free {{pod}}",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 36 },
+      "id": 40,
+      "title": "Routing Proxy",
+      "type": "row"
+    },
+    {
+      "datasource": "${DS_PROMETHEUS}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          },
+          "mappings": [
+            { "options": { "0": { "text": "UNHEALTHY" }, "1": { "text": "HEALTHY" } }, "type": "value" }
+          ]
+        }
+      },
+      "gridPos": { "h": 4, "w": 12, "x": 0, "y": 37 },
+      "id": 41,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "Replica Health",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "router_replica_healthy",
+          "legendFormat": "{{replica}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": "${DS_PROMETHEUS}",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2 }
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 37 },
+      "id": 42,
+      "title": "Router: Routing Score Per Replica",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "router_replica_routing_score",
+          "legendFormat": "{{replica}}",
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 38,
+  "tags": ["llm", "vllm", "inference", "kubernetes"],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "datasource": "${DS_PROMETHEUS}",
+        "definition": "label_values(vllm:num_requests_running, namespace)",
+        "name": "namespace",
+        "label": "Namespace",
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": "${DS_PROMETHEUS}",
+        "definition": "label_values(vllm:num_requests_running{namespace=\"$namespace\"}, pod)",
+        "name": "pod",
+        "label": "Pod",
+        "multi": true,
+        "includeAll": true,
+        "type": "query"
+      }
+    ]
+  },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "vLLM — Production Inference Stack",
+  "uid": "vllm-prod-stack",
+  "version": 1
+}

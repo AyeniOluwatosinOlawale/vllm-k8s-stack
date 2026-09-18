@@ -1,0 +1,51 @@
+{{- if .Values.observability.serviceMonitor.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: vllm-metrics
+  namespace: monitoring
+  labels:
+    {{- include "vllm-stack.labels" . | nindent 4 }}
+    release: {{ .Values.observability.serviceMonitor.prometheusRelease }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ include "vllm-stack.namespace" . }}
+  selector:
+    matchLabels:
+      app: vllm
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.observability.serviceMonitor.interval }}
+      scrapeTimeout: 5s
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_pod_name]
+          targetLabel: pod
+        - sourceLabels: [__meta_kubernetes_pod_node_name]
+          targetLabel: node
+
+{{- if .Values.router.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: vllm-router-metrics
+  namespace: monitoring
+  labels:
+    {{- include "vllm-stack.labels" . | nindent 4 }}
+    release: {{ .Values.observability.serviceMonitor.prometheusRelease }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ include "vllm-stack.namespace" . }}
+  selector:
+    matchLabels:
+      app: vllm-router
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+{{- end }}
+{{- end }}

@@ -1,0 +1,154 @@
+# Amazon EKS — GPU values
+# Node type: g4dn.xlarge (1× NVIDIA T4, 4 vCPUs, 16GB RAM) — ~$0.53/hr
+# For larger models: g5.xlarge (A10G, 24GB VRAM) — ~$1.01/hr
+#
+# Pre-requisites:
+#   1. Create cluster with GPU managed node group:
+#      eksctl create cluster --name vllm-cluster --region us-east-1 \
+#        --nodegroup-name gpu-nodes --node-type g4dn.xlarge \
+#        --nodes 2 --nodes-min 1 --nodes-max 4 \
+#        --managed --asg-access
+#
+#   2. Install NVIDIA device plugin (EKS doesn't bundle it):
+#      kubectl apply -f https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/v0.15.0/deployments/static/nvidia-device-plugin.yml
+#
+#   3. Install GPU Operator for DCGM metrics:
+#      helm install gpu-operator nvidia/gpu-operator \
+#        --namespace gpu-operator --create-namespace \
+#        --values nvidia/gpu-operator-values.yaml
+#
+#   4. Install AWS Load Balancer Controller for ingress:
+#      helm install aws-load-balancer-controller eks/aws-load-balancer-controller \
+#        --namespace kube-system --set clusterName=vllm-cluster
+#
+#   5. Install kube-prometheus-stack + prometheus-adapter (same as GKE)
+#
+# Deploy:
+#   helm install vllm-stack helm/vllm-stack/ \
+#     --namespace llm-serving --create-namespace \
+#     --values helm/vllm-stack/values-cloud-eks.yaml \
+#     --set secrets.hfToken=$HF_TOKEN \
+#     --set secrets.vllmApiKey=$VLLM_API_KEY
+
+vllm:
+  image:
+    repository: vllm/vllm-openai
+    tag: "v0.6.3"
+    pullPolicy: IfNotPresent
+
+  replicaCount: 2
+
+  model:
+    # T4 has 16GB VRAM — use a quantized 8B model to fit with headroom
+    # For full FP16 Llama 8B use g5.xlarge (A10G, 24GB)
+    id: "meta-llama/Meta-Llama-3.1-8B-Instruct"
+    alias: "llama-3.1-8b"
+    maxLen: 4096    # Reduced from 8192 to fit in T4 16GB
+
+  engine:
+    tensorParallelSize: 1
+    gpuMemoryUtilization: "0.85"  # slightly lower on T4 for stability
+    maxNumSeqs: 128
+    maxNumBatchedTokens: 4096
+    swapSpace: 4
+    enablePrefixCaching: true
+    enableChunkedPrefill: true
+    maxChunkedTokens: 256
+
+  resources:
+    requests:
+      memory: 12Gi
+      cpu: "3"
+      nvidia.com/gpu: "1"
+    limits:
+      memory: 15Gi
+      cpu: "4"
+      nvidia.com/gpu: "1"
+
+  nodeSelector:
+    beta.kubernetes.io/instance-type: g4dn.xlarge
+
+  tolerations:
+    - key: nvidia.com/gpu
+      operator: Exists
+      effect: NoSchedule
+
+  podAntiAffinity: true
+
+  persistence:
+    enabled: true
+    storageClass: gp3             # EKS gp3 SSD (faster than gp2)
+    size: 50Gi
+    accessMode: ReadWriteOnce
+
+  probes:
+    startup:
+      initialDelaySeconds: 60
+      periodSeconds: 10
+      failureThreshold: 30
+    readiness:
+      initialDelaySeconds: 120
+      periodSeconds: 10
+      failureThreshold: 3
+    liveness:
+      initialDelaySeconds: 180
+      periodSeconds: 30
+      failureThreshold: 5
+
+  pdb:
+    enabled: true
+    minAvailable: 1
+
+router:
+  enabled: true
+  replicaCount: 2
+  pollIntervalS: 5
+  requestTimeoutS: 300
+  maxRetries: 2
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: "250m"
+    limits:
+      memory: 512Mi
+      cpu: "500m"
+  service:
+    type: ClusterIP
+    port: 80
+  ingress:
+    enabled: true
+    className: alb               # AWS Application Load Balancer
+    host: "llm.your-domain.com"
+    tls:
+      enabled: true
+      secretName: vllm-tls-cert
+    annotations:
+      kubernetes.io/ingress.class: alb
+      alb.ingress.kubernetes.io/scheme: internet-facing
+      alb.ingress.kubernetes.io/target-type: ip
+      alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=300
+      # ALB doesn't buffer — good for SSE streaming
+      alb.ingress.kubernetes.io/backend-protocol: HTTP
+
+autoscaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 4
+  queueDepthTarget: "5"
+  kvCacheTarget: "750m"
+  scaleDown:
+    stabilizationWindowSeconds: 300
+  scaleUp:
+    stabilizationWindowSeconds: 30
+
+observability:
+  serviceMonitor:
+    enabled: true
+    prometheusRelease: kube-prometheus-stack
+    interval: 10s
+  prometheusRule:
+    enabled: true
+    prometheusRelease: kube-prometheus-stack
+  grafana:
+    dashboardEnabled: true
+    dashboardConfigMapName: vllm-grafana-dashboard

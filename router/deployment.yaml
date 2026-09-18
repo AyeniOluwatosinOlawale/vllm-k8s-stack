@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-router
+  namespace: llm-serving
+  labels:
+    app: vllm-router
+    app.kubernetes.io/component: routing-proxy
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: vllm-router
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: vllm-router
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values: [vllm-router]
+                topologyKey: kubernetes.io/hostname
+      containers:
+        - name: router
+          image: ghcr.io/your-org/vllm-router:latest  # build from k8s/router-proxy/
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: vllm-router-config
+          resources:
+            requests:
+              memory: 256Mi
+              cpu: "250m"
+            limits:
+              memory: 512Mi
+              cpu: "500m"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 30

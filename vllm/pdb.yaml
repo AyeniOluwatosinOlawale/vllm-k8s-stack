@@ -1,0 +1,18 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: vllm-pdb
+  namespace: llm-serving
+  labels:
+    app: vllm
+spec:
+  # Always keep at least one pod running during voluntary disruptions
+  # (node drain, cluster upgrades, rolling deploys).
+  # This means: if you have 2 replicas, only 1 can be disrupted at a time.
+  # If you have 1 replica, voluntary disruptions will be blocked until
+  # the replica count is raised — intentional, forcing a scale-up before
+  # maintenance.
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: vllm

@@ -1,0 +1,35 @@
+{{- if and .Values.router.enabled .Values.router.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: vllm-ingress
+  namespace: {{ include "vllm-stack.namespace" . }}
+  labels:
+    {{- include "vllm-stack.labels" . | nindent 4 }}
+  annotations:
+    kubernetes.io/ingress.class: {{ .Values.router.ingress.className }}
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    {{- with .Values.router.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- if .Values.router.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.router.ingress.host }}
+      secretName: {{ .Values.router.ingress.tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.router.ingress.host }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: vllm-router
+                port:
+                  name: http
+{{- end }}

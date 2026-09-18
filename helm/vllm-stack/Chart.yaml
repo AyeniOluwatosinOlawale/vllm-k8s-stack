@@ -1,0 +1,18 @@
+apiVersion: v2
+name: vllm-stack
+description: Production LLM serving stack — vLLM + KV-cache-aware router + Prometheus observability
+type: application
+version: 0.1.0
+appVersion: "0.6.3"
+keywords:
+  - llm
+  - vllm
+  - inference
+  - kubernetes
+  - gpu
+maintainers:
+  - name: Inference Engineering Team
+    url: https://github.com/your-org/vllm-stack
+dependencies: []
+annotations:
+  category: AI/ML Infrastructure

@@ -1,0 +1,145 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: vllm-alerts
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: vllm.capacity
+      interval: 30s
+      rules:
+        # KV-cache is > 85% full — a replica is near capacity; scale-out likely.
+        - alert: VLLMHighKVCacheUsage
+          expr: |
+            avg by (pod, namespace) (vllm:gpu_cache_usage_perc{namespace="llm-serving"}) > 0.85
+          for: 5m
+          labels:
+            severity: warning
+            team: inference
+          annotations:
+            summary: "vLLM pod {{ $labels.pod }} KV-cache > 85%"
+            description: >
+              Pod {{ $labels.pod }} has KV-cache fill at {{ $value | humanizePercentage }}.
+              New requests may be queued or sequences swapped to CPU.
+              Consider scaling out or reducing MAX_MODEL_LEN.
+            runbook_url: "https://your-wiki/vllm-runbooks#kv-cache-full"
+
+        # More than 20 requests waiting across the deployment — queue is building.
+        - alert: VLLMHighQueueDepth
+          expr: |
+            sum by (namespace) (vllm:num_requests_waiting{namespace="llm-serving"}) > 20
+          for: 2m
+          labels:
+            severity: warning
+            team: inference
+          annotations:
+            summary: "vLLM queue depth > 20 in {{ $labels.namespace }}"
+            description: >
+              {{ $value }} requests are waiting. Either add replicas or investigate
+              whether a slow request is monopolising GPU slots.
+
+        # Critical: KV-cache is > 95% — active evictions, high TPOT degradation.
+        - alert: VLLMCriticalKVCacheUsage
+          expr: |
+            max by (pod, namespace) (vllm:gpu_cache_usage_perc{namespace="llm-serving"}) > 0.95
+          for: 1m
+          labels:
+            severity: critical
+            team: inference
+          annotations:
+            summary: "vLLM pod {{ $labels.pod }} KV-cache > 95% — active evictions"
+            description: >
+              KV-cache is {{ $value | humanizePercentage }} full. Sequences are
+              being evicted or swapped to CPU. P99 TTFT and TPOT will be severely degraded.
+
+    - name: vllm.latency
+      interval: 30s
+      rules:
+        # P99 TTFT > 5 seconds — user-visible quality-of-service breach.
+        - alert: VLLMHighTTFT
+          expr: |
+            histogram_quantile(0.99,
+              sum by (pod, le) (
+                rate(vllm:time_to_first_token_seconds_bucket{namespace="llm-serving"}[5m])
+              )
+            ) > 5
+          for: 3m
+          labels:
+            severity: warning
+            team: inference
+          annotations:
+            summary: "vLLM P99 TTFT > 5s on {{ $labels.pod }}"
+            description: >
+              P99 time-to-first-token is {{ $value }}s. Investigate queue depth,
+              KV-cache pressure, and whether a single long-context request is
+              blocking the prefill queue.
+
+        # P99 inter-token latency > 200ms — decode is stalling.
+        - alert: VLLMHighTPOT
+          expr: |
+            histogram_quantile(0.99,
+              sum by (pod, le) (
+                rate(vllm:time_per_output_token_seconds_bucket{namespace="llm-serving"}[5m])
+              )
+            ) > 0.2
+          for: 3m
+          labels:
+            severity: warning
+            team: inference
+          annotations:
+            summary: "vLLM P99 TPOT > 200ms on {{ $labels.pod }}"
+            description: >
+              P99 time-per-output-token is {{ $value }}s. Check GPU memory bandwidth,
+              batch size, and whether tensor-parallel communication is adding overhead.
+
+    - name: vllm.availability
+      interval: 30s
+      rules:
+        # Fewer ready pods than the minimum — risk of all capacity going down.
+        - alert: VLLMReplicaDown
+          expr: |
+            kube_deployment_status_replicas_ready{
+              deployment="vllm", namespace="llm-serving"
+            } < 1
+          for: 1m
+          labels:
+            severity: critical
+            team: inference
+          annotations:
+            summary: "No ready vLLM replicas in {{ $labels.namespace }}"
+            description: >
+              All vLLM pods are down or not ready. Requests will fail with 503.
+              Check pod events: kubectl describe pods -n llm-serving -l app=vllm
+
+        # GPU utilization > 98% for > 10 minutes — GPU is saturated, not just busy.
+        - alert: VLLMGPUSaturated
+          expr: |
+            avg by (pod) (
+              DCGM_FI_DEV_GPU_UTIL{Kubernetes_namespace="llm-serving"} / 100
+            ) > 0.98
+          for: 10m
+          labels:
+            severity: warning
+            team: inference
+          annotations:
+            summary: "GPU fully saturated on {{ $labels.pod }} for 10+ minutes"
+            description: >
+              The GPU has been at 98%+ utilisation for 10 minutes. This typically
+              means the compute demand exceeds capacity — consider adding a replica.
+
+    - name: vllm.recording
+      interval: 30s
+      rules:
+        # Pre-computed rate for the HPA and dashboard to use without per-query overhead.
+        - record: vllm:requests_per_second
+          expr: |
+            sum by (pod, namespace) (
+              rate(vllm:request_success_total{namespace="llm-serving"}[1m])
+            )
+        - record: vllm:generation_tokens_per_second
+          expr: |
+            sum by (pod, namespace) (
+              rate(vllm:generation_tokens_total{namespace="llm-serving"}[1m])
+            )

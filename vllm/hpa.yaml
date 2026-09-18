@@ -1,0 +1,114 @@
+---
+# HPA scaling on two signals simultaneously:
+#
+#   1. vllm_num_requests_waiting — queue depth per pod.
+#      If > 5 requests are queued per pod on average, add a replica.
+#      This is the primary scale-out signal: requests are piling up.
+#
+#   2. vllm_gpu_cache_usage_perc — KV-cache fill ratio per pod.
+#      If KV-cache is > 75% full on average, add a replica.
+#      This prevents cache eviction storms under sustained load.
+#
+# Both metrics require the prometheus-adapter to be installed and configured
+# to expose vLLM's Prometheus metrics as Kubernetes custom metrics.
+# See: k8s/observability/prometheus-adapter-values.yaml for the mapping rules.
+#
+# HPA behaviour: whichever metric recommends the most replicas wins.
+# Scale-in is controlled by the stabilization window to avoid flapping.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: vllm-hpa
+  namespace: llm-serving
+  labels:
+    app: vllm
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: vllm
+  minReplicas: 1
+  maxReplicas: 8
+  metrics:
+    # Scale when average queue depth per pod exceeds 5 requests.
+    - type: Pods
+      pods:
+        metric:
+          name: vllm_num_requests_waiting
+        target:
+          type: AverageValue
+          averageValue: "5"
+
+    # Scale when average KV-cache fill exceeds 75%.
+    # vllm_gpu_cache_usage_perc is a gauge in [0,1]; multiply by 100 for %.
+    - type: Pods
+      pods:
+        metric:
+          name: vllm_gpu_cache_usage_perc
+        target:
+          type: AverageValue
+          # 0.75 in the raw gauge value = 75% cache utilization
+          averageValue: "750m"  # milli-units: 750m = 0.75
+
+  behavior:
+    scaleUp:
+      # React quickly to queue buildup — don't wait.
+      stabilizationWindowSeconds: 30
+      policies:
+        # Add at most 2 replicas per 60s to avoid thundering-herd cold-starts.
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+    scaleDown:
+      # Wait 5 minutes before scaling down to avoid flapping when load is bursty.
+      stabilizationWindowSeconds: 300
+      policies:
+        # Remove 1 replica at a time; wait 2 minutes between scale-down steps.
+        - type: Pods
+          value: 1
+          periodSeconds: 120
+
+---
+# Prometheus Adapter ConfigMap — teaches the adapter how to translate
+# vLLM's /metrics output into Kubernetes custom metrics API objects.
+# Apply to the prometheus-adapter namespace if using the prometheus-adapter chart.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-adapter-config
+  namespace: monitoring
+data:
+  config.yaml: |
+    rules:
+      # vllm_num_requests_waiting: gauge per pod
+      - seriesQuery: 'vllm:num_requests_waiting{namespace="llm-serving"}'
+        resources:
+          overrides:
+            namespace: {resource: "namespace"}
+            pod: {resource: "pod"}
+        name:
+          matches: "^vllm:(.*)$"
+          as: "vllm_${1}"
+        metricsQuery: 'sum(<<.Series>>{<<.LabelMatchers>>}) by (<<.GroupBy>>)'
+
+      # vllm_gpu_cache_usage_perc: gauge in [0,1] per pod
+      - seriesQuery: 'vllm:gpu_cache_usage_perc{namespace="llm-serving"}'
+        resources:
+          overrides:
+            namespace: {resource: "namespace"}
+            pod: {resource: "pod"}
+        name:
+          matches: "^vllm:(.*)$"
+          as: "vllm_${1}"
+        metricsQuery: 'avg(<<.Series>>{<<.LabelMatchers>>}) by (<<.GroupBy>>)'
+
+      # vllm_num_requests_running: active requests per pod
+      - seriesQuery: 'vllm:num_requests_running{namespace="llm-serving"}'
+        resources:
+          overrides:
+            namespace: {resource: "namespace"}
+            pod: {resource: "pod"}
+        name:
+          matches: "^vllm:(.*)$"
+          as: "vllm_${1}"
+        metricsQuery: 'sum(<<.Series>>{<<.LabelMatchers>>}) by (<<.GroupBy>>)'

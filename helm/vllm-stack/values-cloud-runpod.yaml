@@ -1,0 +1,111 @@
+# RunPod Kubernetes — GPU values
+# Cheapest path to a real GPU for this lab (~$0.20-0.50/hr for an RTX 4090)
+# RunPod offers managed Kubernetes with per-hour GPU billing.
+#
+# Setup:
+#   1. Go to runpod.io → Kubernetes → Create Cluster
+#   2. Add a GPU worker: RTX 4090 (24GB VRAM) or A40 (48GB VRAM)
+#   3. Download kubeconfig and set: export KUBECONFIG=~/runpod-kubeconfig.yaml
+#   4. RunPod clusters come with NVIDIA device plugin pre-installed
+#
+# Deploy:
+#   helm install vllm-stack helm/vllm-stack/ \
+#     --namespace llm-serving --create-namespace \
+#     --values helm/vllm-stack/values-cloud-runpod.yaml \
+#     --set secrets.hfToken=$HF_TOKEN \
+#     --set secrets.vllmApiKey=$VLLM_API_KEY
+
+vllm:
+  image:
+    repository: vllm/vllm-openai
+    tag: "v0.6.3"
+    pullPolicy: IfNotPresent
+
+  replicaCount: 2
+
+  model:
+    # RTX 4090 has 24GB VRAM — Llama 3.1 8B fits in FP16 with room for KV-cache
+    id: "meta-llama/Meta-Llama-3.1-8B-Instruct"
+    alias: "llama-3.1-8b"
+    maxLen: 8192
+
+  engine:
+    tensorParallelSize: 1
+    gpuMemoryUtilization: "0.90"
+    maxNumSeqs: 256
+    maxNumBatchedTokens: 8192
+    swapSpace: 4
+    enablePrefixCaching: true
+    enableChunkedPrefill: true
+    maxChunkedTokens: 512
+
+  resources:
+    requests:
+      memory: 16Gi
+      cpu: "4"
+      nvidia.com/gpu: "1"
+    limits:
+      memory: 22Gi
+      cpu: "8"
+      nvidia.com/gpu: "1"
+
+  nodeSelector: {}    # RunPod labels vary — leave empty or set after inspecting nodes
+
+  tolerations:
+    - key: nvidia.com/gpu
+      operator: Exists
+      effect: NoSchedule
+
+  podAntiAffinity: true
+
+  persistence:
+    # RunPod doesn't always have ReadWriteMany storage — use emptyDir per-pod
+    enabled: false
+
+  probes:
+    startup:
+      initialDelaySeconds: 60
+      periodSeconds: 10
+      failureThreshold: 30
+    readiness:
+      initialDelaySeconds: 120
+      periodSeconds: 10
+      failureThreshold: 3
+    liveness:
+      initialDelaySeconds: 180
+      periodSeconds: 30
+      failureThreshold: 5
+
+  pdb:
+    enabled: true
+    minAvailable: 1
+
+router:
+  enabled: true
+  replicaCount: 1    # Save cost on RunPod — single router is fine for testing
+  pollIntervalS: 5
+  requestTimeoutS: 300
+  maxRetries: 2
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: "250m"
+    limits:
+      memory: 512Mi
+      cpu: "500m"
+  service:
+    type: LoadBalancer   # RunPod exposes LoadBalancer services with public IP
+    port: 80
+  ingress:
+    enabled: false      # Use LoadBalancer IP directly for testing
+
+autoscaling:
+  enabled: false    # Skip unless prometheus-adapter is installed
+
+observability:
+  serviceMonitor:
+    enabled: false   # Enable if you install kube-prometheus-stack on RunPod
+  prometheusRule:
+    enabled: false
+  grafana:
+    dashboardEnabled: false

@@ -1,0 +1,55 @@
+# NVIDIA GPU Operator Helm values
+# Install: helm install gpu-operator nvidia/gpu-operator -n gpu-operator --create-namespace -f this file
+#
+# The GPU Operator installs:
+#   - NVIDIA driver (or uses pre-installed)
+#   - Container Toolkit (nvidia-container-runtime)
+#   - Device Plugin (exposes nvidia.com/gpu resource)
+#   - DCGM Exporter (Prometheus metrics for GPU utilization, memory, temperature)
+#   - MIG Manager (for A100/H100 multi-instance GPU partitioning)
+
+operator:
+  defaultRuntime: containerd
+
+driver:
+  # Set to false if the node already has drivers installed (bare-metal, cloud VMs with pre-installed driver)
+  enabled: true
+  version: "550.54.15"
+
+toolkit:
+  enabled: true
+  version: "v1.16.1-ubi8"
+
+devicePlugin:
+  enabled: true
+  version: "v0.15.0"
+  config:
+    # Share GPU time-slicing (4 virtual GPUs per physical GPU — useful for dev)
+    # Remove or set to 1 for production workloads that need a full GPU
+    default: |-
+      version: v1
+      flags:
+        migStrategy: none
+      sharing:
+        timeSlicing:
+          resources:
+            - name: nvidia.com/gpu
+              replicas: 1
+
+dcgmExporter:
+  enabled: true
+  version: "3.3.5-3.4.0-ubuntu22.04"
+  serviceMonitor:
+    enabled: true
+    namespace: monitoring
+    # Scrape DCGM metrics every 15 seconds
+    interval: 15s
+
+migManager:
+  enabled: false    # Enable only if using A100/H100 with MIG partitioning
+
+gfd:                # GPU Feature Discovery — labels nodes with GPU properties
+  enabled: true
+
+nodeStatusExporter:
+  enabled: true

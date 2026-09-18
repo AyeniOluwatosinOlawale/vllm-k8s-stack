@@ -1,0 +1,157 @@
+# Google Kubernetes Engine — GPU values
+# Node type: g2-standard-4 (1× NVIDIA L4, 4 vCPUs, 16GB RAM)
+# Spot instances (~$0.30/hr vs $1.20/hr on-demand) — acceptable for dev/test
+#
+# Pre-requisites:
+#   1. Create cluster with GPU node pool:
+#      gcloud container clusters create vllm-cluster \
+#        --zone us-central1-a \
+#        --num-nodes 1
+#      gcloud container node-pools create gpu-pool \
+#        --cluster vllm-cluster \
+#        --zone us-central1-a \
+#        --machine-type g2-standard-4 \
+#        --accelerator type=nvidia-l4,count=1,gpu-driver-version=latest \
+#        --num-nodes 2 \
+#        --spot
+#
+#   2. Install GPU Operator (GKE auto-installs drivers but Operator adds DCGM):
+#      helm install gpu-operator nvidia/gpu-operator \
+#        --namespace gpu-operator --create-namespace \
+#        --values nvidia/gpu-operator-values.yaml
+#
+#   3. Install kube-prometheus-stack for observability:
+#      helm install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
+#        --namespace monitoring --create-namespace
+#
+#   4. Install prometheus-adapter for HPA custom metrics:
+#      helm install prometheus-adapter prometheus-community/prometheus-adapter \
+#        --namespace monitoring \
+#        --set prometheus.url=http://kube-prometheus-stack-prometheus.monitoring.svc
+#
+# Deploy:
+#   helm install vllm-stack helm/vllm-stack/ \
+#     --namespace llm-serving --create-namespace \
+#     --values helm/vllm-stack/values-cloud-gke.yaml \
+#     --set secrets.hfToken=$HF_TOKEN \
+#     --set secrets.vllmApiKey=$VLLM_API_KEY
+
+vllm:
+  image:
+    repository: vllm/vllm-openai
+    tag: "v0.6.3"
+    pullPolicy: IfNotPresent
+
+  replicaCount: 2
+
+  model:
+    # L4 has 24GB VRAM — Llama 3.1 8B in FP16 uses ~16GB, fits comfortably
+    id: "meta-llama/Meta-Llama-3.1-8B-Instruct"
+    alias: "llama-3.1-8b"
+    maxLen: 8192
+
+  engine:
+    tensorParallelSize: 1
+    gpuMemoryUtilization: "0.90"
+    maxNumSeqs: 256
+    maxNumBatchedTokens: 8192
+    swapSpace: 4
+    enablePrefixCaching: true
+    enableChunkedPrefill: true
+    maxChunkedTokens: 512
+
+  resources:
+    requests:
+      memory: 16Gi
+      cpu: "3"
+      nvidia.com/gpu: "1"
+    limits:
+      memory: 22Gi
+      cpu: "4"
+      nvidia.com/gpu: "1"
+
+  nodeSelector:
+    cloud.google.com/gke-accelerator: nvidia-l4
+
+  tolerations:
+    - key: nvidia.com/gpu
+      operator: Exists
+      effect: NoSchedule
+
+  podAntiAffinity: true
+
+  persistence:
+    enabled: true
+    storageClass: premium-rwo    # GKE SSD PD
+    size: 50Gi
+    accessMode: ReadWriteOnce    # GKE PDs don't support RWX without Filestore
+
+  probes:
+    startup:
+      initialDelaySeconds: 60
+      periodSeconds: 10
+      failureThreshold: 30
+    readiness:
+      initialDelaySeconds: 120
+      periodSeconds: 10
+      failureThreshold: 3
+    liveness:
+      initialDelaySeconds: 180
+      periodSeconds: 30
+      failureThreshold: 5
+
+  pdb:
+    enabled: true
+    minAvailable: 1
+
+router:
+  enabled: true
+  replicaCount: 2
+  pollIntervalS: 5
+  requestTimeoutS: 300
+  maxRetries: 2
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: "250m"
+    limits:
+      memory: 512Mi
+      cpu: "500m"
+  service:
+    type: ClusterIP
+    port: 80
+  ingress:
+    enabled: true
+    className: nginx
+    host: "llm.your-domain.com"   # update this
+    tls:
+      enabled: true
+      secretName: vllm-tls-cert
+    annotations:
+      nginx.ingress.kubernetes.io/proxy-buffering: "off"
+      nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+      nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+      cert-manager.io/cluster-issuer: letsencrypt-prod
+
+autoscaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 4    # 4 L4 GPUs max — adjust to your quota
+  queueDepthTarget: "5"
+  kvCacheTarget: "750m"
+  scaleDown:
+    stabilizationWindowSeconds: 300
+  scaleUp:
+    stabilizationWindowSeconds: 30
+
+observability:
+  serviceMonitor:
+    enabled: true
+    prometheusRelease: kube-prometheus-stack
+    interval: 10s
+  prometheusRule:
+    enabled: true
+    prometheusRelease: kube-prometheus-stack
+  grafana:
+    dashboardEnabled: true
+    dashboardConfigMapName: vllm-grafana-dashboard

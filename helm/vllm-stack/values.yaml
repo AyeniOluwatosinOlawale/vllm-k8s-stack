@@ -1,0 +1,151 @@
+# vllm-stack Helm chart values
+# Override any value with: helm install vllm-stack . -f my-values.yaml
+
+# ─── Namespace ──────────────────────────────────────────────────────────────
+namespace:
+  create: true
+  name: llm-serving
+
+# ─── vLLM Deployment ─────────────────────────────────────────────────────────
+vllm:
+  image:
+    repository: vllm/vllm-openai
+    tag: "v0.6.3"
+    pullPolicy: IfNotPresent
+
+  replicaCount: 2
+
+  model:
+    id: "meta-llama/Meta-Llama-3.1-8B-Instruct"
+    alias: "llama-3.1-8b"
+    maxLen: 8192
+
+  engine:
+    tensorParallelSize: 1
+    gpuMemoryUtilization: "0.90"
+    maxNumSeqs: 256
+    maxNumBatchedTokens: 8192
+    swapSpace: 4
+    enablePrefixCaching: true
+    enableChunkedPrefill: true
+    maxChunkedTokens: 512
+
+  resources:
+    requests:
+      memory: 16Gi
+      cpu: "4"
+      nvidia.com/gpu: "1"
+    limits:
+      memory: 24Gi
+      cpu: "8"
+      nvidia.com/gpu: "1"
+
+  nodeSelector:
+    nvidia.com/gpu.present: "true"
+
+  tolerations:
+    - key: nvidia.com/gpu
+      operator: Exists
+      effect: NoSchedule
+
+  podAntiAffinity: true   # spread replicas across nodes
+
+  persistence:
+    enabled: true
+    storageClass: fast-ssd
+    size: 50Gi
+    accessMode: ReadWriteMany
+
+  probes:
+    startup:
+      initialDelaySeconds: 60
+      periodSeconds: 10
+      failureThreshold: 24    # 60 + 24*10 = 300s max startup window
+    readiness:
+      initialDelaySeconds: 120
+      periodSeconds: 10
+      failureThreshold: 3
+    liveness:
+      initialDelaySeconds: 180
+      periodSeconds: 30
+      failureThreshold: 5
+
+  pdb:
+    enabled: true
+    minAvailable: 1
+
+# ─── Secrets (inject real values before deploying) ───────────────────────────
+secrets:
+  hfToken: "REPLACE_WITH_REAL_TOKEN"
+  vllmApiKey: "REPLACE_WITH_REAL_API_KEY"
+
+# ─── KV-Cache-Aware Router ───────────────────────────────────────────────────
+router:
+  enabled: true
+
+  image:
+    repository: ghcr.io/your-org/vllm-router
+    tag: "latest"
+    pullPolicy: Always
+
+  replicaCount: 2
+
+  pollIntervalS: 5
+  unhealthyThreshold: 3
+  requestTimeoutS: 300
+  maxRetries: 2
+
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: "250m"
+    limits:
+      memory: 512Mi
+      cpu: "500m"
+
+  service:
+    type: ClusterIP
+    port: 80
+
+  ingress:
+    enabled: true
+    className: nginx
+    host: "llm.your-domain.com"
+    tls:
+      enabled: true
+      secretName: vllm-tls-cert
+    annotations:
+      nginx.ingress.kubernetes.io/proxy-buffering: "off"
+      nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+      nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+
+# ─── Autoscaling (HPA) ───────────────────────────────────────────────────────
+autoscaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 8
+  # Scale when avg requests waiting per pod > this value
+  queueDepthTarget: "5"
+  # Scale when avg KV-cache fill per pod > this value (milli-units: 750m = 0.75)
+  kvCacheTarget: "750m"
+  scaleDown:
+    stabilizationWindowSeconds: 300
+  scaleUp:
+    stabilizationWindowSeconds: 30
+
+# ─── Observability ───────────────────────────────────────────────────────────
+observability:
+  serviceMonitor:
+    enabled: true
+    # Must match the label selector on your Prometheus Operator instance.
+    prometheusRelease: kube-prometheus-stack
+    interval: 10s
+
+  prometheusRule:
+    enabled: true
+    prometheusRelease: kube-prometheus-stack
+
+  grafana:
+    # Set to true to create a ConfigMap that Grafana's sidecar will import.
+    dashboardEnabled: false
+    dashboardConfigMapName: vllm-grafana-dashboard

@@ -1,0 +1,44 @@
+{{- if .Values.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: vllm-hpa
+  namespace: {{ include "vllm-stack.namespace" . }}
+  labels:
+    {{- include "vllm-stack.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: vllm
+  minReplicas: {{ .Values.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.autoscaling.maxReplicas }}
+  metrics:
+    - type: Pods
+      pods:
+        metric:
+          name: vllm_num_requests_waiting
+        target:
+          type: AverageValue
+          averageValue: {{ .Values.autoscaling.queueDepthTarget | quote }}
+    - type: Pods
+      pods:
+        metric:
+          name: vllm_gpu_cache_usage_perc
+        target:
+          type: AverageValue
+          averageValue: {{ .Values.autoscaling.kvCacheTarget | quote }}
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: {{ .Values.autoscaling.scaleUp.stabilizationWindowSeconds }}
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: {{ .Values.autoscaling.scaleDown.stabilizationWindowSeconds }}
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120
+{{- end }}

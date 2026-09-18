@@ -1,0 +1,53 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm
+  namespace: {{ include "vllm-stack.namespace" . }}
+  labels:
+    {{- include "vllm-stack.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "vllm-stack.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-headless
+  namespace: {{ include "vllm-stack.namespace" . }}
+  labels:
+    {{- include "vllm-stack.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  selector:
+    {{- include "vllm-stack.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+
+{{- if .Values.router.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-router
+  namespace: {{ include "vllm-stack.namespace" . }}
+  labels:
+    {{- include "vllm-stack.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.router.service.type }}
+  selector:
+    {{- include "vllm-stack.routerSelectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.router.service.port }}
+      targetPort: http
+{{- end }}

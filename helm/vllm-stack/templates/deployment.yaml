@@ -1,0 +1,164 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm
+  namespace: {{ include "vllm-stack.namespace" . }}
+  labels:
+    {{- include "vllm-stack.labels" . | nindent 4 }}
+  annotations:
+    inference.io/model-id: {{ .Values.vllm.model.id | quote }}
+    inference.io/model-alias: {{ .Values.vllm.model.alias | quote }}
+spec:
+  replicas: {{ .Values.vllm.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "vllm-stack.selectorLabels" . | nindent 6 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        {{- include "vllm-stack.selectorLabels" . | nindent 8 }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      {{- if .Values.vllm.podAntiAffinity }}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    {{- include "vllm-stack.selectorLabels" . | nindent 20 }}
+                topologyKey: kubernetes.io/hostname
+      {{- end }}
+      nodeSelector:
+        {{- toYaml .Values.vllm.nodeSelector | nindent 8 }}
+      tolerations:
+        {{- toYaml .Values.vllm.tolerations | nindent 8 }}
+      terminationGracePeriodSeconds: 120
+      volumes:
+        {{- if .Values.vllm.persistence.enabled }}
+        - name: model-cache
+          persistentVolumeClaim:
+            claimName: vllm-model-cache
+        {{- end }}
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 8Gi
+      containers:
+        - name: vllm
+          image: "{{ .Values.vllm.image.repository }}:{{ .Values.vllm.image.tag }}"
+          imagePullPolicy: {{ .Values.vllm.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          command:
+            - python
+            - -m
+            - vllm.entrypoints.openai.api_server
+          args:
+            - --model=$(MODEL_ID)
+            - --tokenizer=$(MODEL_ID)
+            - --tensor-parallel-size=$(TENSOR_PARALLEL_SIZE)
+            - --gpu-memory-utilization=$(GPU_MEMORY_UTILIZATION)
+            - --max-model-len=$(MAX_MODEL_LEN)
+            - --max-num-seqs=$(MAX_NUM_SEQS)
+            - --max-num-batched-tokens=$(MAX_NUM_BATCHED_TOKENS)
+            - --swap-space=$(SWAP_SPACE)
+            - --enable-prefix-caching=$(ENABLE_PREFIX_CACHING)
+            {{- if .Values.vllm.engine.enableChunkedPrefill }}
+            - --enable-chunked-prefill
+            - --max-num-chunked-tokens=$(MAX_NUM_CHUNKED_TOKENS)
+            {{- end }}
+            - --served-model-name={{ .Values.vllm.model.alias }}
+            - --host=0.0.0.0
+            - --port=8000
+            {{- with .Values.vllm.extraArgs }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          envFrom:
+            - configMapRef:
+                name: vllm-config
+          env:
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: vllm-secrets
+                  key: HF_TOKEN
+            - name: VLLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: vllm-secrets
+                  key: VLLM_API_KEY
+            - name: HUGGINGFACE_HUB_CACHE
+              value: /model-cache
+          volumeMounts:
+            {{- if .Values.vllm.persistence.enabled }}
+            - name: model-cache
+              mountPath: /model-cache
+            {{- end }}
+            - name: shm
+              mountPath: /dev/shm
+          resources:
+            {{- toYaml .Values.vllm.resources | nindent 12 }}
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: {{ .Values.vllm.probes.startup.initialDelaySeconds }}
+            periodSeconds: {{ .Values.vllm.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.vllm.probes.startup.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: {{ .Values.vllm.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.vllm.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.vllm.probes.readiness.failureThreshold }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: {{ .Values.vllm.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.vllm.probes.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.vllm.probes.liveness.failureThreshold }}
+
+{{- if .Values.vllm.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: vllm-model-cache
+  namespace: {{ include "vllm-stack.namespace" . }}
+  labels:
+    {{- include "vllm-stack.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - {{ .Values.vllm.persistence.accessMode }}
+  storageClassName: {{ .Values.vllm.persistence.storageClass }}
+  resources:
+    requests:
+      storage: {{ .Values.vllm.persistence.size }}
+{{- end }}
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: vllm-secrets
+  namespace: {{ include "vllm-stack.namespace" . }}
+  labels:
+    {{- include "vllm-stack.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  HF_TOKEN: {{ .Values.secrets.hfToken | quote }}
+  VLLM_API_KEY: {{ .Values.secrets.vllmApiKey | quote }}

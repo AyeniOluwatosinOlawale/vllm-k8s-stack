@@ -1,0 +1,47 @@
+---
+# ClusterIP service — used by the routing proxy for load-balanced access.
+# kube-proxy distributes connections across all ready pods.
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm
+  namespace: llm-serving
+  labels:
+    app: vllm
+    app.kubernetes.io/component: inference-engine
+spec:
+  type: ClusterIP
+  selector:
+    app: vllm
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+      protocol: TCP
+
+---
+# Headless service — bypasses kube-proxy and returns individual pod IPs.
+# The routing proxy uses DNS discovery on this service to get per-pod
+# endpoints and poll /metrics from each replica independently for
+# KV-cache-aware routing decisions.
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-headless
+  namespace: llm-serving
+  labels:
+    app: vllm
+    app.kubernetes.io/component: inference-engine
+  annotations:
+    # Tell Prometheus to scrape individual pod endpoints, not the ClusterIP.
+    prometheus.io/scrape: "true"
+spec:
+  type: ClusterIP
+  clusterIP: None   # Headless
+  selector:
+    app: vllm
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+      protocol: TCP

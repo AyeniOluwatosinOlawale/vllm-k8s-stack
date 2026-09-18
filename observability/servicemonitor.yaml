@@ -1,0 +1,74 @@
+---
+# ServiceMonitor for vLLM pods (scraped via the headless service).
+# Requires: Prometheus Operator installed in the monitoring namespace.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: vllm-metrics
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack    # must match Prometheus operator's serviceMonitorSelector
+spec:
+  namespaceSelector:
+    matchNames:
+      - llm-serving
+  selector:
+    matchLabels:
+      app: vllm
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 10s       # scrape every 10s — vLLM updates gauges per-batch
+      scrapeTimeout: 5s
+      # Relabel to add useful pod identity labels to every time series.
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_pod_name]
+          targetLabel: pod
+        - sourceLabels: [__meta_kubernetes_pod_node_name]
+          targetLabel: node
+        - sourceLabels: [__meta_kubernetes_namespace]
+          targetLabel: namespace
+
+---
+# ServiceMonitor for the routing proxy.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: vllm-router-metrics
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  namespaceSelector:
+    matchNames:
+      - llm-serving
+  selector:
+    matchLabels:
+      app: vllm-router
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 5s
+
+---
+# ServiceMonitor for DCGM Exporter (GPU hardware metrics).
+# Installed by the NVIDIA GPU Operator when dcgmExporter.serviceMonitor.enabled=true.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: dcgm-exporter-metrics
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  namespaceSelector:
+    matchNames:
+      - gpu-operator
+  selector:
+    matchLabels:
+      app: nvidia-dcgm-exporter
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 15s
